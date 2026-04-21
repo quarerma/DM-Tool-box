@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 
-import { isAuthenticated } from '@/lib/auth'
+import { useAuth } from '@/lib/useAuth'
 
 type OpenPageProps = {
   children: ReactNode
@@ -12,10 +12,17 @@ export function OpenPage({
   children,
   redirectWhenAuthenticated = false,
 }: OpenPageProps) {
-  const authenticated = isAuthenticated()
+  const { isAuthenticated, isResolving } = useAuth()
 
-  // Placeholder branch for public-only routes (e.g. login/register).
-  if (redirectWhenAuthenticated && authenticated) {
+  if (redirectWhenAuthenticated && isResolving) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Checking session…
+      </div>
+    )
+  }
+
+  if (redirectWhenAuthenticated && isAuthenticated) {
     return <Navigate replace to="/secure" />
   }
 

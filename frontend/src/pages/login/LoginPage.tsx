@@ -5,7 +5,7 @@ import { login } from '@/boot/axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { markAuthenticated } from '@/lib/auth'
+import { useAuthActions } from '@/lib/useAuth'
 
 type FormErrors = {
   email?: string
@@ -23,6 +23,7 @@ function validate(email: string, password: string): FormErrors {
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const { markAuthenticated } = useAuthActions()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [touched, setTouched] = useState<Record<string, boolean>>({})

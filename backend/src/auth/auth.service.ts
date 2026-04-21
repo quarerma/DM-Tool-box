@@ -14,6 +14,7 @@ import {
   computeServerFingerprint,
   FingerprintData,
 } from './fingerprint.gen';
+import { SessionsService } from './sessions.service';
 
 type SessionTokens = {
   auth_token: string;
@@ -32,6 +33,7 @@ export class AuthService {
     private readonly hash: HashService,
     private readonly email: EmailService,
     private readonly configService: ConfigService,
+    private readonly sessions: SessionsService,
   ) {}
 
   async login(body: LoginBody, req: Request) {
@@ -105,7 +107,11 @@ export class AuthService {
 
     const { data, fingerprint } = computeServerFingerprint(req);
 
-    const tokens = this.createSessionTokens(user, deviceId, fingerprint);
+    const jti = await this.sessions.create({
+      userId: user.id,
+      deviceId,
+    });
+    const tokens = this.createSessionTokens(user, deviceId, fingerprint, jti);
 
     const deviceSecret = this.hash.generateRandomToken();
     const deviceSecretHash = this.hash.sha256(deviceSecret);
@@ -244,7 +250,16 @@ export class AuthService {
       throw new HttpException('User not found', 404);
     }
 
-    const tokens = this.createSessionTokens(userRow[0], deviceId, fingerprint);
+    const jti = await this.sessions.create({
+      userId: userRow[0].id,
+      deviceId,
+    });
+    const tokens = this.createSessionTokens(
+      userRow[0],
+      deviceId,
+      fingerprint,
+      jti,
+    );
     this.setAuthCookies(req.res!, tokens, deviceSecret);
 
     return { message: 'Device verified and logged in successfully' };
@@ -284,6 +299,7 @@ export class AuthService {
     user: { id: number },
     device_id: string,
     current_fingerprint: string,
+    jti: string,
   ): SessionTokens {
     const auth_token = this.jwtService.sign(
       {
@@ -301,6 +317,7 @@ export class AuthService {
         user_id: user.id,
         device_id,
         type: 'refresh',
+        jti,
       },
       { expiresIn: '90d' },
     );
@@ -337,7 +354,22 @@ export class AuthService {
     });
   }
 
-  clearAuthCookies(res: Response) {
+  async logout(req: Request, res: Response) {
+    const refreshToken = req.cookies?.refresh_token;
+    if (refreshToken) {
+      try {
+        const payload: any = this.jwtService.verify(refreshToken);
+        if (payload?.sub && payload?.device_id) {
+          await this.sessions.revokeByDevice(
+            Number(payload.sub),
+            String(payload.device_id),
+          );
+        }
+      } catch {
+        // Expired/invalid refresh token — still clear cookies below.
+      }
+    }
+
     res.clearCookie('auth_token', { path: '/' });
     res.clearCookie('refresh_token', { path: '/' });
     res.clearCookie('device_secret', { path: '/' });

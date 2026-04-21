@@ -8,6 +8,7 @@ import { HashModule } from '../hash/hash.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { SessionsService } from './sessions.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Global()
@@ -26,7 +27,14 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [JwtModule, PassportModule, JwtAuthGuard, JwtStrategy, AuthService],
+  providers: [AuthService, SessionsService, JwtStrategy, JwtAuthGuard],
+  exports: [
+    JwtModule,
+    PassportModule,
+    JwtAuthGuard,
+    JwtStrategy,
+    AuthService,
+    SessionsService,
+  ],
 })
 export class AuthModule {}

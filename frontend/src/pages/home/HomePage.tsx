@@ -3,17 +3,18 @@ import { useNavigate } from 'react-router-dom'
 import { logout as logoutRequest } from '@/boot/axios'
 import { SectionCard } from '@/components/SectionCard'
 import { Button } from '@/components/ui/button'
-import { clearAuth, isAuthenticated } from '@/lib/auth'
+import { useAuth, useAuthActions } from '@/lib/useAuth'
 
 export function HomePage() {
   const navigate = useNavigate()
-  const authenticated = isAuthenticated()
+  const { isAuthenticated } = useAuth()
+  const { clearAuthenticated } = useAuthActions()
 
   async function handleLogout() {
     try {
       await logoutRequest()
     } finally {
-      clearAuth()
+      clearAuthenticated()
       navigate('/login')
     }
   }
@@ -27,7 +28,7 @@ export function HomePage() {
             Lightweight audio control for TTRPG Dungeon Masters.
           </p>
         </div>
-        {authenticated ? (
+        {isAuthenticated ? (
           <Button variant="outline" onClick={handleLogout}>
             Sign out
           </Button>
@@ -47,7 +48,7 @@ export function HomePage() {
           up once auth and tracks are connected.
         </SectionCard>
         <SectionCard title="Status">
-          {authenticated
+          {isAuthenticated
             ? 'Signed in. You can reach the secure area.'
             : 'Not signed in — create an account or sign in to continue.'}
         </SectionCard>

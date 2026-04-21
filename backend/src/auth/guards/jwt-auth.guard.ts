@@ -12,6 +12,7 @@ import { DrizzleService } from '../../drizzle/drizzle.service';
 import { userDevices } from '../../drizzle/schema';
 import { HashService } from '../../hash/hash.service';
 import { computeServerFingerprint } from '../fingerprint.gen';
+import { SessionsService } from '../sessions.service';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -19,6 +20,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     private readonly jwtService: JwtService,
     private readonly db: DrizzleService,
     private readonly hashService: HashService,
+    private readonly sessions: SessionsService,
   ) {
     super();
   }
@@ -94,6 +96,21 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     }
 
     if (isRefresh) {
+      const oldJti = payload.jti;
+      if (!oldJti) {
+        throw new UnauthorizedException({
+          error: 'session_expired',
+          code: 'relogin',
+          message: 'Refresh token missing session id. Re-authenticate.',
+        });
+      }
+
+      const { jti: newJti } = await this.sessions.rotate(
+        userId,
+        deviceId,
+        oldJti,
+      );
+
       const newAuth = this.jwtService.sign(
         {
           sub: userId,
@@ -110,6 +127,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
           user_id: userId,
           device_id: deviceId,
           type: 'refresh',
+          jti: newJti,
         },
         { expiresIn: '90d' },
       );

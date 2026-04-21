@@ -1,16 +1,24 @@
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 
-import { isAuthenticated } from '@/lib/auth'
+import { useAuth } from '@/lib/useAuth'
 
 type SecurePageProps = {
   children: ReactNode
 }
 
 export function SecurePage({ children }: SecurePageProps) {
-  const authenticated = isAuthenticated()
+  const { isAuthenticated, isResolving } = useAuth()
 
-  if (!authenticated) {
+  if (isResolving) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Checking session…
+      </div>
+    )
+  }
+
+  if (!isAuthenticated) {
     return <Navigate replace to="/login" />
   }
 

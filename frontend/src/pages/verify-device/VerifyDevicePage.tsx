@@ -5,10 +5,11 @@ import { verifyDevice } from '@/boot/axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { markAuthenticated } from '@/lib/auth'
+import { useAuthActions } from '@/lib/useAuth'
 
 export function VerifyDevicePage() {
   const navigate = useNavigate()
+  const { markAuthenticated } = useAuthActions()
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

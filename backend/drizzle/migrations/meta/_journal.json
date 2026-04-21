@@ -15,6 +15,13 @@
       "when": 1776794175539,
       "tag": "0001_user_devices_and_login_codes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776796999784,
+      "tag": "0002_user_sessions_rotation",
+      "breakpoints": true
     }
   ]
 }
