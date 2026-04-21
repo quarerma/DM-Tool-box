@@ -10,9 +10,8 @@ type SecurePageProps = {
 export function SecurePage({ children }: SecurePageProps) {
   const authenticated = isAuthenticated()
 
-  // Placeholder branch for future secure route checks.
   if (!authenticated) {
-    return <Navigate replace to="/" />
+    return <Navigate replace to="/login" />
   }
 
   return <>{children}</>

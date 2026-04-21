@@ -1,6 +1,8 @@
 import { Route, Routes } from 'react-router-dom'
 
 import { HomePage } from '@/pages/home/HomePage'
+import { LoginPage } from '@/pages/login/LoginPage'
+import { RegisterPage } from '@/pages/register/RegisterPage'
 import { OpenPage } from '@/router/wrappers/OpenPage'
 import { SecurePage } from '@/router/wrappers/SecurePage'
 
@@ -12,6 +14,22 @@ export function AppRoutes() {
         element={
           <OpenPage>
             <HomePage />
+          </OpenPage>
+        }
+      />
+      <Route
+        path="/login"
+        element={
+          <OpenPage redirectWhenAuthenticated>
+            <LoginPage />
+          </OpenPage>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <OpenPage redirectWhenAuthenticated>
+            <RegisterPage />
           </OpenPage>
         }
       />

@@ -155,3 +155,15 @@ export async function postNoHeader<T = unknown>(
 ) {
   return axiosInstance.post<T>(endpoint, data, options)
 }
+
+export async function register(name: string, email: string, password: string) {
+  return axiosInstance.post('/auth/register', { name, email, password })
+}
+
+export async function logout() {
+  return axiosInstance.post('/auth/logout', {})
+}
+
+export async function checkAuth() {
+  return axiosInstance.get('/auth/check')
+}

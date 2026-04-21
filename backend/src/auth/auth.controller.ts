@@ -4,13 +4,14 @@ import {
   Get,
   HttpCode,
   Post,
-  Req,
   Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 
-import { ChangePasswordDto } from './dto/change-password.dto';
+import type { UserPayload } from '../types/jwt.user.payload';
+import { CurrentUser } from './decorators/current-user.decorator';
 import { UserLoginDto } from './dto/user-login.dto';
 import { UserRegisterDto } from './dto/user-register.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -21,46 +22,36 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() dto: UserLoginDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.login(dto);
-
-    // Placeholder cookie token to keep frontend withCredentials flow compatible.
-    const token = this.authService.signToken({
-      sub: 'placeholder-user-id',
-      email: dto.email,
-    });
-    res.cookie('auth_token', token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: false,
-    });
-
-    return result;
+  async login(
+    @Body() body: UserLoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.authService.login(body, res);
+    return { success: true };
   }
 
   @Post('register')
-  async register(@Body() dto: UserRegisterDto) {
-    return this.authService.register(dto);
+  async register(
+    @Body() body: UserRegisterDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.authService.register(body, res);
+    return { success: true };
   }
 
   @Get('check')
-  async check(@Req() req: Request) {
-    return {
-      ...(await this.authService.check()),
-      hasAuthCookie: Boolean(req.cookies?.auth_token),
-    };
+  @UseGuards(JwtAuthGuard)
+  checkAuth(@CurrentUser() user: UserPayload | null) {
+    if (!user) {
+      throw new UnauthorizedException('Session not found');
+    }
+    return true;
   }
 
   @Post('logout')
   @HttpCode(200)
-  async logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie('auth_token');
-    return this.authService.logout();
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Post('change-password')
-  async changePassword(@Body() dto: ChangePasswordDto) {
-    return this.authService.changePassword(dto);
+  logout(@Res({ passthrough: true }) res: Response) {
+    this.authService.clearAuthCookies(res);
+    return { message: 'Logged out successfully' };
   }
 }

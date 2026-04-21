@@ -17,9 +17,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     HashModule,
     DrizzleModule,
     JwtModule.registerAsync({
+      imports: [],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET', 'dev-secret'),
+        secret: configService.get<string>('JWT_SECRET'),
         signOptions: { expiresIn: '1d' },
       }),
     }),
