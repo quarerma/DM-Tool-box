@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 
 import type { UserPayload } from '../types/jwt.user.payload';
@@ -22,6 +23,7 @@ import { AuthService } from './auth.service';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('login')
   async login(@Body() body: UserLoginDto, @Req() req: Request) {
     await this.authService.login(
@@ -31,6 +33,7 @@ export class AuthController {
     return { success: true };
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('verify-device')
   async verifyDevice(
     @Body() body: { code: string; user_id: number },
@@ -47,6 +50,7 @@ export class AuthController {
     );
   }
 
+  @Throttle({ default: { ttl: 60_000, limit: 3 } })
   @Post('register')
   register(@Body() body: UserRegisterDto) {
     return this.authService.register(body);

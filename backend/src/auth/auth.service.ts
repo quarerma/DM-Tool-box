@@ -8,6 +8,7 @@ import { DrizzleService } from '../drizzle/drizzle.service';
 import { loginCodes, userDevices, users } from '../drizzle/schema';
 import { EmailService } from '../email/email.service';
 import { HashService } from '../hash/hash.service';
+import { AuthEventsService } from './auth-events.service';
 import { UserLoginDto } from './dto/user-login.dto';
 import { UserRegisterDto } from './dto/user-register.dto';
 import {
@@ -34,6 +35,7 @@ export class AuthService {
     private readonly email: EmailService,
     private readonly configService: ConfigService,
     private readonly sessions: SessionsService,
+    private readonly events: AuthEventsService,
   ) {}
 
   async login(body: LoginBody, req: Request) {
@@ -61,6 +63,13 @@ export class AuthService {
     const user = response[0];
 
     if (!user || !this.hash.verifyString(body.password, user.password)) {
+      this.events.log({
+        type: 'login_failure',
+        userId: user?.id ?? null,
+        deviceId,
+        req,
+        metadata: { reason: 'bad_credentials', email: normalizedEmail },
+      });
       throw new HttpException('Bad credentials', 401);
     }
 
@@ -94,6 +103,13 @@ export class AuthService {
         emails: [user.email],
         subject: 'New device login verification',
         body: `A login attempt was made from a new device. Your verification code is:\n\n${code}\n\nIf this wasn't you, please secure your account immediately.`,
+      });
+
+      this.events.log({
+        type: 'login_new_device_challenge',
+        userId: user.id,
+        deviceId,
+        req,
       });
 
       throw new HttpException(
@@ -147,6 +163,26 @@ export class AuthService {
         })
         .execute();
     }
+
+    this.events.log({
+      type: 'login_success',
+      userId: user.id,
+      deviceId,
+      req,
+    });
+
+    void this.email
+      .sendLoginNotification({
+        to: user.email,
+        ip: extractClientIp(req),
+        userAgent: data.user_agent || undefined,
+        at: new Date(),
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `Login notification email failed for user=${user.id}: ${(error as Error).message}`,
+        );
+      });
 
     return { message: 'Login successful' };
   }
@@ -241,7 +277,7 @@ export class AuthService {
     }
 
     const userRow = await session
-      .select({ id: users.id })
+      .select({ id: users.id, email: users.email })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
@@ -261,6 +297,26 @@ export class AuthService {
       jti,
     );
     this.setAuthCookies(req.res!, tokens, deviceSecret);
+
+    this.events.log({
+      type: 'device_verified',
+      userId: userRow[0].id,
+      deviceId,
+      req,
+    });
+
+    void this.email
+      .sendLoginNotification({
+        to: userRow[0].email,
+        ip: extractClientIp(req),
+        userAgent: data.user_agent || undefined,
+        at: new Date(),
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `Login notification email failed for user=${userRow[0].id}: ${(error as Error).message}`,
+        );
+      });
 
     return { message: 'Device verified and logged in successfully' };
   }
@@ -292,6 +348,13 @@ export class AuthService {
 
     const payload = { sub: inserted[0].insertedId };
     const token = await this.jwtService.signAsync(payload);
+
+    this.events.log({
+      type: 'register',
+      userId: inserted[0].insertedId,
+      metadata: { email: normalizedEmail },
+    });
+
     return { token };
   }
 
@@ -356,14 +419,16 @@ export class AuthService {
 
   async logout(req: Request, res: Response) {
     const refreshToken = req.cookies?.refresh_token;
+    let userId: number | null = null;
+    let deviceId: string | null = null;
+
     if (refreshToken) {
       try {
         const payload: any = this.jwtService.verify(refreshToken);
         if (payload?.sub && payload?.device_id) {
-          await this.sessions.revokeByDevice(
-            Number(payload.sub),
-            String(payload.device_id),
-          );
+          userId = Number(payload.sub);
+          deviceId = String(payload.device_id);
+          await this.sessions.revokeByDevice(userId, deviceId);
         }
       } catch {
         // Expired/invalid refresh token — still clear cookies below.
@@ -373,6 +438,13 @@ export class AuthService {
     res.clearCookie('auth_token', { path: '/' });
     res.clearCookie('refresh_token', { path: '/' });
     res.clearCookie('device_secret', { path: '/' });
+
+    this.events.log({
+      type: 'logout',
+      userId,
+      deviceId,
+      req,
+    });
   }
 
   compareFingerprintFields(current: FingerprintData, stored: FingerprintData) {
@@ -394,4 +466,15 @@ export class AuthService {
 
     return { strict, balanced, nonCritical };
   }
+}
+
+function extractClientIp(req: Request): string | undefined {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0].trim();
+  }
+  if (Array.isArray(forwarded) && forwarded.length > 0) {
+    return forwarded[0].split(',')[0].trim();
+  }
+  return req.ip ?? req.socket?.remoteAddress ?? undefined;
 }

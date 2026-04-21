@@ -20,6 +20,33 @@ export class EmailService {
     );
   }
 
+  async sendLoginNotification(params: {
+    to: string;
+    ip?: string;
+    userAgent?: string;
+    at: Date;
+  }): Promise<void> {
+    const when = params.at.toISOString();
+    const where = params.ip ?? 'unknown IP';
+    const ua = params.userAgent ?? 'unknown device';
+    const body = [
+      `A new sign-in to your account was just recorded.`,
+      ``,
+      `When:   ${when}`,
+      `IP:     ${where}`,
+      `Device: ${ua}`,
+      ``,
+      `If this was you, no action is needed.`,
+      `If not, sign in and revoke the session from your account's devices list.`,
+    ].join('\n');
+
+    await this.send({
+      emails: [params.to],
+      subject: 'New sign-in to your account',
+      body,
+    });
+  }
+
   private async postToWebhook(
     url: string,
     missingUrlMessage: string,

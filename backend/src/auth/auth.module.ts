@@ -7,6 +7,7 @@ import { DrizzleModule } from '../drizzle/drizzle.module';
 import { HashModule } from '../hash/hash.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AuthEventsService } from './auth-events.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { SessionsService } from './sessions.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -27,7 +28,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, SessionsService, JwtStrategy, JwtAuthGuard],
+  providers: [
+    AuthService,
+    SessionsService,
+    AuthEventsService,
+    JwtStrategy,
+    JwtAuthGuard,
+  ],
   exports: [
     JwtModule,
     PassportModule,
@@ -35,6 +42,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtStrategy,
     AuthService,
     SessionsService,
+    AuthEventsService,
   ],
 })
 export class AuthModule {}

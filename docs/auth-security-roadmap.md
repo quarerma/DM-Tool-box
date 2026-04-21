@@ -48,55 +48,50 @@ See `src/auth/sessions.service.ts` and the refresh branch of
   `cacheService.deleteSpecificCache('session', [userId])` after the update.
 - Cleanup cron — `DELETE FROM user_sessions WHERE revoked_at < now() -
   interval '7 days' OR expires_at < now()`. Keep a short audit window.
-- Alerting — the `token_reuse_detected` code path should fire an alert. Right
-  now it logs at warn level in `SessionsService.rotate`.
+- Alerting — the `token_reuse_detected` code path already persists to
+  `auth_events`; add a query/alert on that.
 
-### ⬜ Rate limiting — ~30 min
+### ✅ Rate limiting — **DONE**
 
-Install `@nestjs/throttler`, register `ThrottlerModule` globally, and put
-stricter limits on `/auth/login`, `/auth/register`, `/auth/verify-device`.
-Progressive lockout (per-user after N failures) is a separate, slightly larger
-step — see below.
+`@nestjs/throttler` registered globally in `app.module.ts` with a generous
+default (120 req/min per IP). `/auth/login` and `/auth/verify-device` are
+capped at 5/min; `/auth/register` at 3/min via `@Throttle` decorators in the
+controller.
 
-**Sketch:**
-```ts
-// app.module.ts
-ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }])
-// auth.controller.ts
-@Throttle({ default: { ttl: 60_000, limit: 5 } })
-@Post('login') ...
-```
-
-**Progressive lockout** needs an `auth_attempts` table keyed by
-`(user_id_or_email, ip)` with a sliding-window counter. Tiered policy:
+**Still open** — progressive lockout. Current throttler keys by IP only, so an
+attacker rotating IPs is uncapped per account. Needs an `auth_attempts` table
+keyed by `(user_id_or_email, ip)` with a sliding-window counter. Tiered
+policy:
 - 5 failures / 1 min → 60 s wait.
 - 10 failures / 10 min → 10 min wait + email the user.
 - 20 failures / 1 h → lock the account, require password reset.
 
-### ⬜ `auth_events` append-only audit log — ~30 min
+### ✅ `auth_events` append-only audit log — **DONE**
 
-Single partition-by-month table; every login / refresh / reuse / revoke /
-password-change writes a row. Nothing in the hot path reads it — it exists for
-compliance, debugging, and anomaly rules to query asynchronously.
+See `src/auth/auth-events.service.ts`. Plain (non-partitioned) table in
+`src/drizzle/schema.ts`; migration `drizzle/migrations/0003_auth_events.sql`.
+Indexed on `(user_id, created_at)` and `(event_type, created_at)` for the two
+common query shapes. Writes are fire-and-forget — a failed audit log never
+breaks the auth flow.
 
-**Schema:**
-```sql
-CREATE TABLE auth_events (
-  id          bigserial,
-  user_id     int,
-  device_id   text,
-  event_type  text,   -- 'login' | 'refresh' | 'reuse_detected' | 'revoke' | 'logout' | 'password_change'
-  ip          inet,
-  user_agent  text,
-  metadata    jsonb,
-  created_at  timestamptz NOT NULL DEFAULT now()
-) PARTITION BY RANGE (created_at);
-```
+Events currently emitted:
+- `login_success`, `login_failure`, `login_new_device_challenge`
+- `device_verified`
+- `register`
+- `logout`
+- `session_revoked` (per-device), `session_revoked_all`
+- `token_reuse_detected`
 
-Attach to the existing service hooks — `AuthService.login/logout/register`,
-`SessionsService.rotate/revokeAll`. Partition maintenance is a small cron:
-create next month's partition at the 15th; `DROP PARTITION` past the retention
-window (e.g. 6 months for DM-Tool-box, longer if compliance dictates).
+**Known follow-ups** when traffic grows:
+- Partitioning — schema was designed to be partition-friendly (monotonically
+  increasing `id` + `created_at`). When volume warrants, re-create as
+  `PARTITION BY RANGE (created_at)` and rotate monthly partitions with
+  `DROP PARTITION` past retention.
+- Retention — add a cron `DELETE FROM auth_events WHERE created_at < now() -
+  interval '6 months'` (or whatever compliance dictates).
+- Anomaly queries — e.g. "more than 10 `login_failure` events for one user in
+  the last 5 minutes" → page on-call. This is the seed data for risk-based
+  auth (P3).
 
 ### ⬜ HIBP breach check on signup — ~30 min
 
@@ -109,14 +104,20 @@ remaining 35 chars. If present, reject registration / password change with a
 No API key required. Free, unlimited, anonymous (the prefix-only lookup is
 k-anonymous). Takes ~100 ms of latency on the signup path.
 
-### ⬜ Login notification emails — ~1 h (assuming email delivery exists)
+### ✅ Login notification emails — **DONE**
 
-Every successful login → email the account holder with the UA, approximate
-location from IP, timestamp, and a "wasn't you?" link that kicks off a global
-session revoke. Biggest deterrent-plus-detection feature per unit of work.
+`EmailService.sendLoginNotification({ to, ip, userAgent, at })` fires from
+`AuthService.login` and `AuthService.consumeLoginCode` on every successful
+login. Body includes timestamp, IP (respects `X-Forwarded-For`), and UA. Still
+flows through the webhook shim — when `EMAIL_WEBHOOK_URL` is unset, the
+intended recipient and subject are logged.
 
-Needs real email delivery wired to `EmailService` (currently a webhook shim).
-Postmark / Resend free tiers are fine to start.
+**Still open:**
+- Plug a real email provider into `EMAIL_WEBHOOK_URL` (Postmark / Resend) when
+  the canvas goes to prod.
+- Add a "wasn't you?" link that hits `POST /auth/sessions/revoke-all` (endpoint
+  doesn't exist yet — see P2 sessions UI).
+- HTML template — current body is plain text.
 
 ---
 
@@ -290,7 +291,7 @@ acceptable.
 
 | Tier | Scope | Rough effort |
 | --- | --- | --- |
-| P1 (minus rotation, done) | Rate limit, audit log, HIBP, notifications | ~half day |
+| P1 remaining | HIBP breach check, progressive lockout | ~1 h |
 | P2 | TOTP, step-up, sessions UI, RS256, email verify | 2–3 days |
 | P3 | Passkeys, risk-based, password reset | weeks, or as needed |
 

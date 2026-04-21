@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 
 import { DrizzleService } from '../drizzle/drizzle.service';
 import { userSessions } from '../drizzle/schema';
+import { AuthEventsService } from './auth-events.service';
 
 const REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const RACE_GRACE_MS = 5_000;
@@ -12,7 +13,10 @@ const RACE_GRACE_MS = 5_000;
 export class SessionsService {
   private readonly logger = new Logger('SessionsService');
 
-  constructor(private readonly db: DrizzleService) {}
+  constructor(
+    private readonly db: DrizzleService,
+    private readonly events: AuthEventsService,
+  ) {}
 
   async create(params: { userId: number; deviceId: string }): Promise<string> {
     const session = this.db.getSession();
@@ -97,7 +101,18 @@ export class SessionsService {
     this.logger.warn(
       `Refresh token reuse detected for user=${userId} device=${deviceId}. Revoking all sessions.`,
     );
-    await this.revokeAll(userId);
+    this.events.log({
+      type: 'token_reuse_detected',
+      userId,
+      deviceId,
+      metadata: { presentedJti: oldJti, currentJti: current.currentJti },
+    });
+    await this.revokeAll(userId, { skipEvent: true });
+    this.events.log({
+      type: 'session_revoked_all',
+      userId,
+      metadata: { reason: 'token_reuse_detected' },
+    });
     throw new UnauthorizedException({
       error: 'token_reuse_detected',
       code: 'relogin',
@@ -117,9 +132,14 @@ export class SessionsService {
           isNull(userSessions.revokedAt),
         ),
       );
+    this.events.log({
+      type: 'session_revoked',
+      userId,
+      deviceId,
+    });
   }
 
-  async revokeAll(userId: number) {
+  async revokeAll(userId: number, opts: { skipEvent?: boolean } = {}) {
     await this.db
       .getSession()
       .update(userSessions)
@@ -130,5 +150,11 @@ export class SessionsService {
           isNull(userSessions.revokedAt),
         ),
       );
+    if (!opts.skipEvent) {
+      this.events.log({
+        type: 'session_revoked_all',
+        userId,
+      });
+    }
   }
 }
