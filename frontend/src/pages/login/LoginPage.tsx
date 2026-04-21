@@ -44,6 +44,9 @@ export function LoginPage() {
       markAuthenticated()
       navigate('/secure')
     } catch (error) {
+      if ((error as { redirected?: boolean }).redirected) {
+        return
+      }
       console.error('Login failed:', error)
       setLoginError('Login failed. Please try again.')
       setLoading(false)

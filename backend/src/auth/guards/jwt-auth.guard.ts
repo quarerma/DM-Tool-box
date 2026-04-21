@@ -5,25 +5,40 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuthGuard } from '@nestjs/passport';
+import { and, eq } from 'drizzle-orm';
 import type { Request, Response } from 'express';
+
+import { DrizzleService } from '../../drizzle/drizzle.service';
+import { userDevices } from '../../drizzle/schema';
+import { HashService } from '../../hash/hash.service';
+import { computeServerFingerprint } from '../fingerprint.gen';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
-  constructor(private readonly jwtService: JwtService) {
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly db: DrizzleService,
+    private readonly hashService: HashService,
+  ) {
     super();
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const session = this.db.getSession();
     const req = context.switchToHttp().getRequest<Request>();
     const res = context.switchToHttp().getResponse<Response>();
     const isDev = process.env.NODE_ENV === 'development';
 
+    const deviceId = req.device_id;
+    const deviceSecret = req.cookies?.device_secret;
     const authToken = req.cookies?.auth_token;
     const refreshToken = req.cookies?.refresh_token;
 
-    if (!authToken && !refreshToken) {
+    if (!deviceId || !deviceSecret || !refreshToken) {
       throw new UnauthorizedException('Missing auth data');
     }
+
+    const { fingerprint: currentFp } = computeServerFingerprint(req);
 
     let payload: any;
     let isRefresh = false;
@@ -33,13 +48,14 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         throw new Error();
       }
       payload = this.jwtService.verify(authToken);
+      if (payload.device_id !== deviceId) throw new Error();
     } catch {
       try {
         if (!refreshToken) {
           throw new Error();
         }
         const rPayload: any = this.jwtService.verify(refreshToken);
-        if (rPayload.type !== 'refresh') {
+        if (rPayload.device_id !== deviceId || rPayload.type !== 'refresh') {
           throw new Error();
         }
         payload = rPayload;
@@ -53,15 +69,48 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       }
     }
 
-    if (isRefresh) {
-      const userId = payload.sub;
+    const userId = payload.sub;
 
+    const deviceRows = await session
+      .select()
+      .from(userDevices)
+      .where(
+        and(
+          eq(userDevices.userId, userId),
+          eq(userDevices.deviceId, deviceId),
+        ),
+      )
+      .limit(1);
+
+    const deviceRecord = deviceRows[0];
+    if (!deviceRecord) {
+      throw new UnauthorizedException('Device not registered');
+    }
+
+    if (
+      deviceRecord.deviceSecretHash !== this.hashService.sha256(deviceSecret)
+    ) {
+      throw new UnauthorizedException('Invalid device secret');
+    }
+
+    if (isRefresh) {
       const newAuth = this.jwtService.sign(
-        { sub: userId, user_id: userId },
+        {
+          sub: userId,
+          user_id: userId,
+          device_id: deviceId,
+          fingerprint: currentFp,
+        },
         { expiresIn: '15m' },
       );
+
       const newRefresh = this.jwtService.sign(
-        { sub: userId, user_id: userId, type: 'refresh' },
+        {
+          sub: userId,
+          user_id: userId,
+          device_id: deviceId,
+          type: 'refresh',
+        },
         { expiresIn: '90d' },
       );
 
@@ -81,6 +130,16 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         ...cookieOpts,
         maxAge: 90 * 24 * 60 * 60 * 1000,
       });
+
+      await session
+        .update(userDevices)
+        .set({ lastLogin: new Date() })
+        .where(
+          and(
+            eq(userDevices.deviceId, deviceId),
+            eq(userDevices.userId, userId),
+          ),
+        );
     }
 
     req.user = payload;

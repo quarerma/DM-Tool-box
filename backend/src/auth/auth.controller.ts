@@ -4,11 +4,12 @@ import {
   Get,
   HttpCode,
   Post,
+  Req,
   Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 
 import type { UserPayload } from '../types/jwt.user.payload';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -22,21 +23,33 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(
-    @Body() body: UserLoginDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    await this.authService.login(body, res);
+  async login(@Body() body: UserLoginDto, @Req() req: Request) {
+    await this.authService.login(
+      { ...body, device_id: req.device_id },
+      req,
+    );
     return { success: true };
   }
 
-  @Post('register')
-  async register(
-    @Body() body: UserRegisterDto,
-    @Res({ passthrough: true }) res: Response,
+  @Post('verify-device')
+  async verifyDevice(
+    @Body() body: { code: string; user_id: number },
+    @Req() req: Request,
   ) {
-    await this.authService.register(body, res);
-    return { success: true };
+    if (!req.device_id) {
+      throw new UnauthorizedException('Missing device id');
+    }
+    return this.authService.consumeLoginCode(
+      Number(body.user_id),
+      body.code,
+      req.device_id,
+      req,
+    );
+  }
+
+  @Post('register')
+  register(@Body() body: UserRegisterDto) {
+    return this.authService.register(body);
   }
 
   @Get('check')

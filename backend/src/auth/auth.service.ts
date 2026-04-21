@@ -1,23 +1,26 @@
-import {
-  HttpException,
-  Injectable,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { sql } from 'drizzle-orm';
-import type { Response } from 'express';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import type { Request, Response } from 'express';
 
 import { DrizzleService } from '../drizzle/drizzle.service';
-import { users } from '../drizzle/schema';
+import { loginCodes, userDevices, users } from '../drizzle/schema';
+import { EmailService } from '../email/email.service';
 import { HashService } from '../hash/hash.service';
 import { UserLoginDto } from './dto/user-login.dto';
 import { UserRegisterDto } from './dto/user-register.dto';
+import {
+  computeServerFingerprint,
+  FingerprintData,
+} from './fingerprint.gen';
 
 type SessionTokens = {
   auth_token: string;
   refresh_token: string;
 };
+
+type LoginBody = UserLoginDto & { device_id?: string };
 
 @Injectable()
 export class AuthService {
@@ -27,11 +30,19 @@ export class AuthService {
     private readonly dataBaseService: DrizzleService,
     private readonly jwtService: JwtService,
     private readonly hash: HashService,
+    private readonly email: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
-  async login(body: UserLoginDto, res: Response) {
+  async login(body: LoginBody, req: Request) {
     const session = this.dataBaseService.getSession();
+    const environment = this.configService.get<string>('NODE_ENV');
     const normalizedEmail = body.email.toLowerCase().trim();
+
+    const deviceId = body.device_id ?? req.device_id;
+    if (!deviceId) {
+      throw new HttpException('Missing device id', 400);
+    }
 
     const response = await session
       .select({
@@ -39,6 +50,7 @@ export class AuthService {
         email: users.email,
         password: users.password,
         name: users.name,
+        twofa_enabled: users.twofa_enabled,
       })
       .from(users)
       .where(sql`LOWER(TRIM(${users.email})) = ${normalizedEmail}`)
@@ -50,13 +62,195 @@ export class AuthService {
       throw new HttpException('Bad credentials', 401);
     }
 
-    const tokens = this.createSessionTokens({ id: user.id });
-    this.setAuthCookies(res, tokens);
+    const devices = await session
+      .select()
+      .from(userDevices)
+      .where(
+        and(eq(userDevices.userId, user.id), eq(userDevices.deviceId, deviceId)),
+      )
+      .limit(1);
+
+    const device = devices[0];
+
+    if (user.twofa_enabled && (!device || !device.authenticated)) {
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      await session
+        .insert(loginCodes)
+        .values({
+          userId: user.id,
+          code,
+          deviceId,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        })
+        .execute();
+
+      if (environment === 'development') {
+        this.logger.log(`Code to authentication: ${code}`);
+      }
+
+      await this.email.send({
+        emails: [user.email],
+        subject: 'New device login verification',
+        body: `A login attempt was made from a new device. Your verification code is:\n\n${code}\n\nIf this wasn't you, please secure your account immediately.`,
+      });
+
+      throw new HttpException(
+        JSON.stringify({
+          message: 'Redirecting for device verification',
+          user_id: user.id,
+        }),
+        307,
+      );
+    }
+
+    const { data, fingerprint } = computeServerFingerprint(req);
+
+    const tokens = this.createSessionTokens(user, deviceId, fingerprint);
+
+    const deviceSecret = this.hash.generateRandomToken();
+    const deviceSecretHash = this.hash.sha256(deviceSecret);
+
+    await session
+      .update(userDevices)
+      .set({
+        deviceSecretHash,
+        lastLogin: new Date(),
+        fingerprintData: data,
+        fingerprintHash: fingerprint,
+        userAgent: data.user_agent,
+      })
+      .where(
+        and(eq(userDevices.userId, user.id), eq(userDevices.deviceId, deviceId)),
+      )
+      .execute();
+
+    this.setAuthCookies(req.res!, tokens, deviceSecret);
+
+    if (!user.twofa_enabled && !device) {
+      await session
+        .insert(userDevices)
+        .values({
+          deviceId,
+          deviceSecretHash,
+          fingerprintData: data,
+          fingerprintHash: fingerprint,
+          userAgent: data.user_agent,
+          userId: user.id,
+          lastLogin: new Date(),
+          authenticated: true,
+        })
+        .execute();
+    }
 
     return { message: 'Login successful' };
   }
 
-  async register(dto: UserRegisterDto, res: Response) {
+  async consumeLoginCode(
+    userId: number,
+    code: string,
+    deviceId: string,
+    req: Request,
+  ) {
+    const session = this.dataBaseService.getSession();
+
+    const codeRecords = await session
+      .select()
+      .from(loginCodes)
+      .where(
+        and(
+          eq(loginCodes.userId, userId),
+          eq(loginCodes.deviceId, deviceId),
+          eq(loginCodes.code, code),
+        ),
+      )
+      .orderBy(desc(loginCodes.createdAt))
+      .limit(1);
+
+    if (codeRecords.length === 0) {
+      throw new HttpException('Invalid verification code', 403);
+    }
+
+    const codeRecord = codeRecords[0];
+
+    if (codeRecord.expiresAt < new Date()) {
+      await session
+        .delete(loginCodes)
+        .where(eq(loginCodes.id, codeRecord.id))
+        .execute();
+      throw new HttpException('Verification code has expired', 403);
+    }
+
+    await session
+      .delete(loginCodes)
+      .where(eq(loginCodes.id, codeRecord.id))
+      .execute();
+
+    const { data, fingerprint } = computeServerFingerprint(req);
+
+    const deviceSecret = this.hash.generateRandomToken();
+    const deviceSecretHash = this.hash.sha256(deviceSecret);
+
+    const existing = await session
+      .select()
+      .from(userDevices)
+      .where(
+        and(
+          eq(userDevices.deviceId, deviceId),
+          eq(userDevices.userId, userId),
+          eq(userDevices.authenticated, false),
+        ),
+      );
+
+    if (existing.length > 0) {
+      await session
+        .update(userDevices)
+        .set({
+          deviceSecretHash,
+          fingerprintData: data,
+          fingerprintHash: fingerprint,
+          userAgent: data.user_agent,
+          lastLogin: new Date(),
+          authenticated: true,
+        })
+        .where(
+          and(
+            eq(userDevices.userId, userId),
+            eq(userDevices.deviceId, deviceId),
+          ),
+        );
+    } else {
+      await session
+        .insert(userDevices)
+        .values({
+          deviceId,
+          deviceSecretHash,
+          fingerprintData: data,
+          fingerprintHash: fingerprint,
+          userAgent: data.user_agent,
+          userId,
+          lastLogin: new Date(),
+          authenticated: true,
+        })
+        .execute();
+    }
+
+    const userRow = await session
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (userRow.length === 0) {
+      throw new HttpException('User not found', 404);
+    }
+
+    const tokens = this.createSessionTokens(userRow[0], deviceId, fingerprint);
+    this.setAuthCookies(req.res!, tokens, deviceSecret);
+
+    return { message: 'Device verified and logged in successfully' };
+  }
+
+  async register(dto: UserRegisterDto) {
     const session = this.dataBaseService.getSession();
     const normalizedEmail = dto.email.toLowerCase().trim();
 
@@ -67,7 +261,7 @@ export class AuthService {
       .limit(1);
 
     if (registered.length > 0) {
-      throw new HttpException('User with provided email already exists.', 409);
+      return { message: 'User with provided email already exists.' };
     }
 
     const hashed_password = this.hash.hashString(dto.password);
@@ -81,28 +275,44 @@ export class AuthService {
       })
       .returning({ insertedId: users.id });
 
-    const newUserId = inserted[0].insertedId;
-    const tokens = this.createSessionTokens({ id: newUserId });
-    this.setAuthCookies(res, tokens);
-
-    return { message: 'Registration successful' };
+    const payload = { sub: inserted[0].insertedId };
+    const token = await this.jwtService.signAsync(payload);
+    return { token };
   }
 
-  createSessionTokens(user: { id: number }): SessionTokens {
+  createSessionTokens(
+    user: { id: number },
+    device_id: string,
+    current_fingerprint: string,
+  ): SessionTokens {
     const auth_token = this.jwtService.sign(
-      { sub: user.id, user_id: user.id },
+      {
+        sub: user.id,
+        user_id: user.id,
+        device_id,
+        fingerprint: current_fingerprint,
+      },
       { expiresIn: '15m' },
     );
 
     const refresh_token = this.jwtService.sign(
-      { sub: user.id, user_id: user.id, type: 'refresh' },
+      {
+        sub: user.id,
+        user_id: user.id,
+        device_id,
+        type: 'refresh',
+      },
       { expiresIn: '90d' },
     );
 
     return { auth_token, refresh_token };
   }
 
-  setAuthCookies(res: Response, tokens: SessionTokens) {
+  setAuthCookies(
+    res: Response,
+    tokens: SessionTokens,
+    device_secret: string,
+  ) {
     const isDev = process.env.NODE_ENV === 'development';
     const opts = {
       httpOnly: true,
@@ -120,17 +330,36 @@ export class AuthService {
       ...opts,
       maxAge: 90 * 24 * 60 * 60 * 1000,
     });
+
+    res.cookie('device_secret', device_secret, {
+      ...opts,
+      maxAge: 90 * 24 * 60 * 60 * 1000,
+    });
   }
 
   clearAuthCookies(res: Response) {
     res.clearCookie('auth_token', { path: '/' });
     res.clearCookie('refresh_token', { path: '/' });
+    res.clearCookie('device_secret', { path: '/' });
   }
 
-  requireUser(payload: unknown) {
-    if (!payload) {
-      throw new UnauthorizedException('Session not found');
-    }
-    return payload;
+  compareFingerprintFields(current: FingerprintData, stored: FingerprintData) {
+    let strict = 0;
+    let balanced = 0;
+    let nonCritical = 0;
+
+    if (current.ua_major !== stored.ua_major) strict++;
+    if (current.platform !== stored.platform) strict++;
+    if (current.device_class !== stored.device_class) strict++;
+    if (current.os_family !== stored.os_family) strict++;
+
+    if (current.accept !== stored.accept) balanced++;
+    if (current.encoding !== stored.encoding) balanced++;
+
+    if (current.language !== stored.language) nonCritical++;
+    if (current.user_agent !== stored.user_agent) nonCritical++;
+    if (current.ja3 !== stored.ja3) nonCritical++;
+
+    return { strict, balanced, nonCritical };
   }
 }

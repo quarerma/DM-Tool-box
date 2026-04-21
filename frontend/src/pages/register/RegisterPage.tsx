@@ -5,7 +5,6 @@ import { register as registerRequest } from '@/boot/axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { markAuthenticated } from '@/lib/auth'
 
 type FormValues = {
   name: string
@@ -91,8 +90,7 @@ export function RegisterPage() {
         values.email.toLowerCase().trim(),
         values.password,
       )
-      markAuthenticated()
-      navigate('/secure')
+      navigate('/login', { state: { justRegistered: true } })
     } catch (error: unknown) {
       console.error('Registration failed:', error)
       const maybeMessage = (error as { response?: { data?: { message?: string } } })

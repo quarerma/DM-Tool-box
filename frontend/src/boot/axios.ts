@@ -160,6 +160,10 @@ export async function register(name: string, email: string, password: string) {
   return axiosInstance.post('/auth/register', { name, email, password })
 }
 
+export async function verifyDevice(userId: number, code: string) {
+  return axiosInstance.post('/auth/verify-device', { user_id: userId, code })
+}
+
 export async function logout() {
   return axiosInstance.post('/auth/logout', {})
 }
