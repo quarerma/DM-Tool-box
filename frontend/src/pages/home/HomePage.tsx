@@ -1,21 +1,22 @@
-import { useNavigate } from 'react-router-dom'
-
-import { logout as logoutRequest } from '@/boot/axios'
-import { SectionCard } from '@/components/SectionCard'
-import { Button } from '@/components/ui/button'
-import { useAuth, useAuthActions } from '@/lib/useAuth'
+import { useNavigate } from "react-router-dom";
+import YouTube from "react-youtube";
+import { logout as logoutRequest } from "@/boot/axios";
+import { Button } from "@/components/ui/button";
+import { useAuth, useAuthActions } from "@/lib/useAuth";
+import { SectionCard } from "@/components/SectionCard";
+import YoutubePlayer from "@/components/YoutubePlayer";
 
 export function HomePage() {
-  const navigate = useNavigate()
-  const { isAuthenticated } = useAuth()
-  const { clearAuthenticated } = useAuthActions()
+  const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
+  const { clearAuthenticated } = useAuthActions();
 
   async function handleLogout() {
     try {
-      await logoutRequest()
+      await logoutRequest();
     } finally {
-      clearAuthenticated()
-      navigate('/login')
+      clearAuthenticated();
+      navigate("/login");
     }
   }
 
@@ -34,25 +35,19 @@ export function HomePage() {
           </Button>
         ) : (
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => navigate('/login')}>
+            <Button variant="outline" onClick={() => navigate("/login")}>
               Sign in
             </Button>
-            <Button onClick={() => navigate('/register')}>Create account</Button>
+            <Button onClick={() => navigate("/register")}>
+              Create account
+            </Button>
           </div>
         )}
       </header>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <SectionCard title="Soundboard">
-          Scene-based music control with smooth transitions and looping — wired
-          up once auth and tracks are connected.
-        </SectionCard>
-        <SectionCard title="Status">
-          {isAuthenticated
-            ? 'Signed in. You can reach the secure area.'
-            : 'Not signed in — create an account or sign in to continue.'}
-        </SectionCard>
-      </div>
+      <SectionCard title="Video">
+        <YoutubePlayer videoId="L4Tmm1zybko" />
+      </SectionCard>
     </main>
-  )
+  );
 }
