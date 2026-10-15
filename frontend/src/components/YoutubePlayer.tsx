@@ -3,8 +3,8 @@ import type { YouTubePlayerOptions } from "@/types/ytb.params";
 import YouTube from "react-youtube";
 
 export default function YoutubePlayer({ videoId }: { videoId: string }) {
-  const [start, setStart] = useState<number>(100);
-  const [end, setEnd] = useState<number>(1005);
+  const [start, setStart] = useState<number>(0);
+  const [end, setEnd] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
   const playerRef = useRef<any>(null);
@@ -18,15 +18,15 @@ export default function YoutubePlayer({ videoId }: { videoId: string }) {
       autoplay: 1,
       playsinline: 1,
       start: start,
-      end: end,
+      end: end ? end : undefined,
     },
   };
 
   const onReady = (event: any) => {
     playerRef.current = event.target;
-    try {
-      event.target.mute();
-    } catch (e) {}
+    if (!end) {
+      setEnd(event.target.getDuration());
+    }
   };
 
   const onEventChange = (event: any) => {
@@ -51,10 +51,7 @@ export default function YoutubePlayer({ videoId }: { videoId: string }) {
         try {
           const t = p.getCurrentTime();
           const now = Date.now();
-          if (
-            t < start - SEEK_COOLDOWN_MS &&
-            now - lastSeekRef.current > SEEK_COOLDOWN_MS
-          ) {
+          if (t < start - 0.2 && now - lastSeekRef.current > SEEK_COOLDOWN_MS) {
             lastSeekRef.current = now;
             if (typeof p.seekTo === "function") {
               p.seekTo(start, true);
