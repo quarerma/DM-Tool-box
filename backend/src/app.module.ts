@@ -9,6 +9,7 @@ import { AppService } from './app.service';
 import { DrizzleModule } from './drizzle/drizzle.module';
 import { EmailModule } from './email/email.module';
 import { RequireDeviceIdMiddleware } from './middleware/require-device-id';
+import { MusicTrackModule } from './music-track/music-track.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { RequireDeviceIdMiddleware } from './middleware/require-device-id';
     DrizzleModule,
     EmailModule,
     AuthModule,
+    MusicTrackModule,
   ],
   controllers: [AppController],
   providers: [

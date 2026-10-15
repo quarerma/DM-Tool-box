@@ -29,6 +29,13 @@
       "when": 1776797577723,
       "tag": "0003_auth_events",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792086327689,
+      "tag": "0004_add_music_track_table",
+      "breakpoints": true
     }
   ]
 }
